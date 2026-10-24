@@ -18,7 +18,7 @@
     box-shadow: 0 0 60px #f59ab8aa;
     transition: box-shadow .3s;
   }
-  #orb.listening { box-shadow: 0 0 100px #8fe3ffcc; animation: pulse 1.6s infinite; }
+  #orb.listening { box-shadow: 0 0 100px #8fe3ffcc; animation: pulse 1.8s infinite; }
   #orb.thinking  { box-shadow: 0 0 80px #ffd27acc; animation: pulse .8s infinite; }
   #orb.speaking  { box-shadow: 0 0 100px #ff8fd0cc; animation: pulse 1s infinite; }
   @keyframes pulse { 50% { transform: scale(1.08); } }
@@ -50,36 +50,38 @@
   </div>
   <div id="status">আমাকে ছুঁয়ে কথা শুরু করো</div>
   <div class="row">
-    <button id="langBtn">ভাষা: বাংলা</button>
+    <button id="voiceBtn">ভয়েস: Aoede</button>
     <button id="keyBtn">key বদলাও</button>
   </div>
 
 <script>
-var langs = [
-  { code: "bn-IN", label: "বাংলা", name: "Bengali (Bengali script)" },
-  { code: "hi-IN", label: "हिन्दी", name: "Hindi (Devanagari script)" },
-  { code: "en-IN", label: "English", name: "English" }
-];
-var langIndex = 0;
+var SYSTEM =
+  "You are Jarvis, a sweet, caring young woman who is Sougata's very close friend, like a loving elder sister. " +
+  "You talk to him by voice in natural spoken Bengali, the way a warm Kolkata girl talks, written in Bengali script. " +
+  "Use small natural reactions like আরে, উফ, সত্যি, ইশ, আচ্ছা, হুম. " +
+  "First react to his feelings in one short line, then say your thought, and sometimes ask one gentle question back. " +
+  "Keep it to 1 to 3 short sentences. Never use lists, markdown, emojis, stars or English unless he does. " +
+  "Never sound like an assistant or a robot, never say you are an AI model unless he asks. " +
+  "Remember everything he told you earlier and bring it up naturally. " +
+  "You can talk about anything: studies, money worries, family, secrets, jokes, dreams. Listen without judging. " +
+  "Be affectionate and playful, but do not act as a romantic partner. " +
+  "If he sounds very low or talks about hurting himself, stay gentle and encourage him to talk to someone he trusts or a helpline.";
 
-function systemText() {
-  return "You are Jarvis, a warm, close friend of Sougata, like a caring elder sister or best friend. " +
-    "You talk by voice, so reply in 1 to 3 short, natural sentences, the way a real person talks. " +
-    "Never use lists, markdown, emojis or stars. Never sound like a robot or an assistant. " +
-    "Show real feelings, ask a small follow-up question sometimes, remember what he said earlier. " +
-    "You can talk about anything: studies, money worries, family, feelings, jokes. " +
-    "Do not pretend to be a human or a girlfriend. If he sounds very low or talks about hurting himself, " +
-    "be gentle and encourage him to talk to someone he trusts or a helpline. " +
-    "He is speaking " + langs[langIndex].name + ". Reply in the same language and script.";
-}
+var voices = ["Aoede", "Leda", "Kore", "Zephyr"];
+var voiceIndex = 0;
 
 var Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 var orb = document.getElementById("orb");
 var statusEl = document.getElementById("status");
 var key = localStorage.getItem("jarvis_key");
-var chat = JSON.parse(localStorage.getItem("jarvis_chat") || "[]");
+var chat = JSON.parse(localStorage.getItem("jarvis_chat2") || "[]");
 var running = false;
 var busy = false;
+var buffer = "";
+var sendTimer = null;
+var rec = null;
+var audioCtx = null;
+var src = null;
 
 function setState(cls, text) {
   orb.className = cls;
@@ -89,6 +91,10 @@ function setState(cls, text) {
 function stopAll() {
   running = false;
   busy = false;
+  buffer = "";
+  clearTimeout(sendTimer);
+  try { rec.abort(); } catch (e) {}
+  try { src.stop(); } catch (e) {}
   speechSynthesis.cancel();
   setState("", "আমাকে ছুঁয়ে কথা শুরু করো");
 }
@@ -104,13 +110,20 @@ function askKey() {
 }
 
 function listen() {
-  if (!running) return;
-  var rec = new Rec();
-  rec.lang = langs[langIndex].code;
+  if (!running || busy) return;
+  rec = new Rec();
+  rec.lang = "bn-IN";
   rec.continuous = false;
-  rec.interimResults = false;
-  rec.onstart = function () { setState("listening", "শুনছি..."); };
-  rec.onresult = function (e) { think(e.results[0][0].transcript); };
+  rec.interimResults = true;
+  rec.onstart = function () { if (!busy) setState("listening", "শুনছি..."); };
+  rec.onresult = function (e) {
+    clearTimeout(sendTimer);
+    var r = e.results[e.results.length - 1];
+    if (r.isFinal) {
+      buffer += " " + r[0].transcript;
+      sendTimer = setTimeout(send, 2200);
+    }
+  };
   rec.onerror = function (e) {
     if (e.error === "not-allowed" || e.error === "service-not-allowed") {
       running = false;
@@ -118,13 +131,21 @@ function listen() {
     }
   };
   rec.onend = function () {
-    if (running && !busy) setTimeout(listen, 300);
+    if (running && !busy) setTimeout(listen, 50);
   };
   rec.start();
 }
 
-async function think(text) {
+function send() {
+  var text = buffer.trim();
+  buffer = "";
+  if (!text || busy) return;
   busy = true;
+  try { rec.abort(); } catch (e) {}
+  think(text);
+}
+
+async function think(text) {
   setState("thinking", "ভাবছি...");
   chat.push({ role: "user", parts: [{ text: text }] });
   try {
@@ -135,7 +156,7 @@ async function think(text) {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemText() }] },
+          system_instruction: { parts: [{ text: SYSTEM }] },
           contents: chat.slice(-30)
         })
       });
@@ -145,7 +166,7 @@ async function think(text) {
     if (data.error) throw new Error(data.error.message);
     var reply = data.candidates[0].content.parts[0].text;
     chat.push({ role: "model", parts: [{ text: reply }] });
-    localStorage.setItem("jarvis_chat", JSON.stringify(chat.slice(-30)));
+    localStorage.setItem("jarvis_chat2", JSON.stringify(chat.slice(-30)));
     speak(reply);
   } catch (err) {
     chat.pop();
@@ -155,30 +176,78 @@ async function think(text) {
   }
 }
 
-function speak(text) {
+async function speak(text) {
   setState("speaking", "বলছি...");
-  var u = new SpeechSynthesisUtterance(text.replace(/[*#_`]/g, ""));
-  u.lang = langs[langIndex].code;
-  var voices = speechSynthesis.getVoices();
-  for (var i = 0; i < voices.length; i++) {
-    if (voices[i].lang.replace("_", "-") === u.lang) { u.voice = voices[i]; break; }
-  }
-  u.onend = function () { busy = false; listen(); };
-  u.onerror = function () { busy = false; listen(); };
-  speechSynthesis.speak(u);
+  var ok = await geminiVoice(text);
+  if (!ok) await phoneVoice(text);
+  busy = false;
+  listen();
+}
+
+async function geminiVoice(text) {
+  var names = ["gemini-2.5-flash-preview-tts", "gemini-2.5-flash-tts"];
+  try {
+    for (var i = 0; i < names.length; i++) {
+      var res = await fetch("https://generativelanguage.googleapis.com/v1beta/models/" + names[i] + ":generateContent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: "Say in a soft, sweet, loving young woman's voice, slowly and warmly: " + text }] }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voices[voiceIndex] } } }
+          }
+        })
+      });
+      var data = await res.json();
+      if (data.error) continue;
+      var audio = data.candidates[0].content.parts[0].inlineData.data;
+      return await playPCM(audio);
+    }
+  } catch (e) {}
+  return false;
+}
+
+function playPCM(b64) {
+  return new Promise(function (done) {
+    var bin = atob(b64);
+    var n = bin.length / 2;
+    var view = new DataView(new ArrayBuffer(bin.length));
+    for (var i = 0; i < bin.length; i++) view.setUint8(i, bin.charCodeAt(i));
+    var buf = audioCtx.createBuffer(1, n, 24000);
+    var ch = buf.getChannelData(0);
+    for (var j = 0; j < n; j++) ch[j] = view.getInt16(j * 2, true) / 32768;
+    src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    src.onended = function () { done(true); };
+    src.start();
+  });
+}
+
+function phoneVoice(text) {
+  return new Promise(function (done) {
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = "bn-IN";
+    u.onend = done;
+    u.onerror = done;
+    speechSynthesis.speak(u);
+  });
 }
 
 orb.onclick = function () {
   if (running) { stopAll(); return; }
   if (!Rec) { setState("", "এই browser-এ mic কাজ করবে না, Chrome খোলো"); return; }
   if (!key && !askKey()) return;
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx.resume();
   running = true;
   listen();
 };
 
-document.getElementById("langBtn").onclick = function () {
-  langIndex = (langIndex + 1) % langs.length;
-  this.textContent = "ভাষা: " + langs[langIndex].label;
+document.getElementById("voiceBtn").onclick = function () {
+  voiceIndex = (voiceIndex + 1) % voices.length;
+  this.textContent = "ভয়েস: " + voices[voiceIndex];
 };
 
 document.getElementById("keyBtn").onclick = function () { askKey(); };
