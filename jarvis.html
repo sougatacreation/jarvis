@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis</title>
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(circle at 50% 35%, #2a1f4d, #120e27 70%);
+    color: #f1e8ff;
+    font-family: system-ui, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  #orb {
+    position: relative; width: 190px; height: 190px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ffe3ec, #f59ab8 55%, #9b4fc4);
+    box-shadow: 0 0 60px #f59ab8aa;
+    transition: box-shadow .3s;
+  }
+  #orb.listening { box-shadow: 0 0 100px #8fe3ffcc; animation: pulse 1.6s infinite; }
+  #orb.thinking  { box-shadow: 0 0 80px #ffd27acc; animation: pulse .8s infinite; }
+  #orb.speaking  { box-shadow: 0 0 100px #ff8fd0cc; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { transform: scale(1.08); } }
+  .eye {
+    position: absolute; top: 72px; width: 16px; height: 22px; border-radius: 50%;
+    background: #3a1f55; animation: blink 4s infinite;
+  }
+  #eyeL { left: 56px; } #eyeR { right: 56px; }
+  @keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(.1); } }
+  #mouth {
+    position: absolute; left: 50%; top: 118px; width: 30px; height: 10px; margin-left: -15px;
+    border-bottom: 4px solid #3a1f55; border-radius: 0 0 30px 30px;
+  }
+  #orb.speaking #mouth { animation: talk .35s infinite alternate; }
+  @keyframes talk { to { height: 18px; } }
+  #status { margin-top: 36px; font-size: 18px; opacity: .85; min-height: 24px; text-align: center; padding: 0 20px; }
+  .row { margin-top: 22px; display: flex; gap: 12px; }
+  button {
+    background: none; border: 1px solid #b79be0; color: #f1e8ff;
+    padding: 8px 16px; border-radius: 20px; font-size: 14px;
+  }
+</style>
+</head>
+<body>
+  <div id="orb">
+    <div class="eye" id="eyeL"></div>
+    <div class="eye" id="eyeR"></div>
+    <div id="mouth"></div>
+  </div>
+  <div id="status">আমাকে ছুঁয়ে কথা শুরু করো</div>
+  <div class="row">
+    <button id="langBtn">ভাষা: বাংলা</button>
+    <button id="keyBtn">key বদলাও</button>
+  </div>
+
+<script>
+var langs = [
+  { code: "bn-IN", label: "বাংলা", name: "Bengali (Bengali script)" },
+  { code: "hi-IN", label: "हिन्दी", name: "Hindi (Devanagari script)" },
+  { code: "en-IN", label: "English", name: "English" }
+];
+var langIndex = 0;
+
+function systemText() {
+  return "You are Jarvis, a warm, close friend of Sougata, like a caring elder sister or best friend. " +
+    "You talk by voice, so reply in 1 to 3 short, natural sentences, the way a real person talks. " +
+    "Never use lists, markdown, emojis or stars. Never sound like a robot or an assistant. " +
+    "Show real feelings, ask a small follow-up question sometimes, remember what he said earlier. " +
+    "You can talk about anything: studies, money worries, family, feelings, jokes. " +
+    "Do not pretend to be a human or a girlfriend. If he sounds very low or talks about hurting himself, " +
+    "be gentle and encourage him to talk to someone he trusts or a helpline. " +
+    "He is speaking " + langs[langIndex].name + ". Reply in the same language and script.";
+}
+
+var Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+var orb = document.getElementById("orb");
+var statusEl = document.getElementById("status");
+var key = localStorage.getItem("jarvis_key");
+var chat = JSON.parse(localStorage.getItem("jarvis_chat") || "[]");
+var running = false;
+var busy = false;
+
+function setState(cls, text) {
+  orb.className = cls;
+  statusEl.textContent = text;
+}
+
+function stopAll() {
+  running = false;
+  busy = false;
+  speechSynthesis.cancel();
+  setState("", "আমাকে ছুঁয়ে কথা শুরু করো");
+}
+
+function askKey() {
+  var k = prompt("তোমার Gemini API key এখানে paste করো");
+  if (k && k.trim()) {
+    key = k.trim();
+    localStorage.setItem("jarvis_key", key);
+    return true;
+  }
+  return false;
+}
+
+function listen() {
+  if (!running) return;
+  var rec = new Rec();
+  rec.lang = langs[langIndex].code;
+  rec.continuous = false;
+  rec.interimResults = false;
+  rec.onstart = function () { setState("listening", "শুনছি..."); };
+  rec.onresult = function (e) { think(e.results[0][0].transcript); };
+  rec.onerror = function (e) {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      running = false;
+      setState("", "Mic-এর permission দাও");
+    }
+  };
+  rec.onend = function () {
+    if (running && !busy) setTimeout(listen, 300);
+  };
+  rec.start();
+}
+
+async function think(text) {
+  busy = true;
+  setState("thinking", "ভাবছি...");
+  chat.push({ role: "user", parts: [{ text: text }] });
+  try {
+    var res = await fetch("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemText() }] },
+        contents: chat.slice(-30)
+      })
+    });
+    var data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    var reply = data.candidates[0].content.parts[0].text;
+    chat.push({ role: "model", parts: [{ text: reply }] });
+    localStorage.setItem("jarvis_chat", JSON.stringify(chat.slice(-30)));
+    speak(reply);
+  } catch (err) {
+    chat.pop();
+    running = false;
+    busy = false;
+    setState("", "Error: " + err.message);
+  }
+}
+
+function speak(text) {
+  setState("speaking", "বলছি...");
+  var u = new SpeechSynthesisUtterance(text.replace(/[*#_`]/g, ""));
+  u.lang = langs[langIndex].code;
+  var voices = speechSynthesis.getVoices();
+  for (var i = 0; i < voices.length; i++) {
+    if (voices[i].lang.replace("_", "-") === u.lang) { u.voice = voices[i]; break; }
+  }
+  u.onend = function () { busy = false; listen(); };
+  u.onerror = function () { busy = false; listen(); };
+  speechSynthesis.speak(u);
+}
+
+orb.onclick = function () {
+  if (running) { stopAll(); return; }
+  if (!Rec) { setState("", "এই browser-এ mic কাজ করবে না, Chrome খোলো"); return; }
+  if (!key && !askKey()) return;
+  running = true;
+  listen();
+};
+
+document.getElementById("langBtn").onclick = function () {
+  langIndex = (langIndex + 1) % langs.length;
+  this.textContent = "ভাষা: " + langs[langIndex].label;
+};
+
+document.getElementById("keyBtn").onclick = function () { askKey(); };
+</script>
+</body>
+</html>
